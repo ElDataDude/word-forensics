@@ -17,13 +17,36 @@ import hashlib
 from docx import Document
 from typing import Dict, List, Tuple, Any
 from dotenv import load_dotenv
-from statistical_analysis import ForensicStatisticalAnalyzer
+from statistical import ForensicStatisticalAnalyzer
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s',  # Simplified format for terminal
+    handlers=[
+        logging.StreamHandler(),  # Terminal output
+        logging.FileHandler('forensics.log')  # File output with full debug info
+    ]
+)
+
+# Set up file logger with detailed format
+file_handler = logging.FileHandler('forensics.log')
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+# Set up console handler with minimal format
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter('%(message)s'))
+
+# Remove default handlers and add our custom ones
+logger = logging.getLogger()
+logger.handlers = []
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 class WordForensicAnalyzer:
-    def __init__(self, target_path: str, same_origin_path: str, reference_path: str):
+    def __init__(self, target_path: str, same_origin_path: str, reference_files: List[str]):
         """Initialize the analyzer with paths to documents for comparison."""
         load_dotenv()
         
@@ -41,7 +64,7 @@ class WordForensicAnalyzer:
         
         self.target_path = Path(target_path)
         self.same_origin_path = Path(same_origin_path)
-        self.reference_path = Path(reference_path)
+        self.reference_files = [Path(file) for file in reference_files]
         
         # Create output directory within project structure
         self.output_dir = Path(os.path.dirname(os.path.abspath(__file__))) / "output"
@@ -53,18 +76,29 @@ class WordForensicAnalyzer:
         
         # Initialize statistical analyzer
         self.statistical_analyzer = ForensicStatisticalAnalyzer(
-            reference_dir=self.reference_path.parent,
+            reference_dir=Path(os.path.dirname(os.path.abspath(__file__))) / "input" / "reference",  # Use the parent directory of the reference files
             cache_dir=self.cache_dir
         )
         self.statistical_analyzer.set_analyzer(self)
         
-    def validate_files(self) -> None:
-        """Validate existence and format of input files."""
-        # Validate input files
-        for file_path in [self.target_path, self.same_origin_path, self.reference_path]:
-            if not file_path.exists():
-                raise FileNotFoundError(f"File not found: {file_path}")
-            if file_path.suffix.lower() != '.docx':
+    def validate_files(self):
+        """Validate that all input files exist and are .docx files."""
+        files_to_check = []
+        
+        # Add target and same-origin files if they exist
+        if self.target_path:
+            files_to_check.append(self.target_path)
+        if self.same_origin_path:
+            files_to_check.append(self.same_origin_path)
+            
+        # Add reference files if they exist
+        if self.reference_files:
+            files_to_check.extend(self.reference_files)
+        
+        for file_path in files_to_check:
+            if not os.path.exists(file_path):
+                raise ValueError(f"File not found: {file_path}")
+            if not str(file_path).lower().endswith('.docx'):
                 raise ValueError(f"Invalid file format for {file_path}. Must be .docx")
         
     def extract_metadata(self, docx_path: Path) -> Dict[str, Any]:
@@ -247,6 +281,32 @@ class WordForensicAnalyzer:
             logging.error(error_msg)
             structure_info["error"] = error_msg
             return structure_info
+
+    def analyze_document(self, docx_path: Path) -> Dict[str, Any]:
+        """
+        Analyze a single document by running all available analysis methods.
+        Returns a dictionary containing all analysis results.
+        """
+        try:
+            analysis_results = {
+                "metadata": self.extract_metadata(docx_path),
+                "content": self.analyze_content(docx_path),
+                "ooxml": self.analyze_ooxml_structure(docx_path),
+                "binary": self.analyze_binary_content(docx_path),
+                "file_info": {
+                    "name": docx_path.name,
+                    "size": docx_path.stat().st_size,
+                    "created": datetime.fromtimestamp(docx_path.stat().st_ctime).isoformat(),
+                    "modified": datetime.fromtimestamp(docx_path.stat().st_mtime).isoformat()
+                }
+            }
+            return analysis_results
+        except Exception as e:
+            logging.error(f"Error analyzing document {docx_path}: {str(e)}")
+            return {
+                "error": str(e),
+                "file_path": str(docx_path)
+            }
 
     def analyze_binary_content(self, docx_path: Path) -> Dict[str, Any]:
         """Perform binary analysis of the document."""
@@ -484,87 +544,91 @@ class WordForensicAnalyzer:
 
     def compare_files(self) -> Dict[str, Any]:
         """Compare the target file with same-origin file."""
-        target_content = self.analyze_content(self.target_path)
-        same_origin_content = self.analyze_content(self.same_origin_path)
+        logging.debug("Starting file comparison...")
         
-        # Calculate similarity score with same-origin file
-        same_origin_similarity = difflib.SequenceMatcher(
-            None, 
-            target_content["text_content"], 
-            same_origin_content["text_content"]
-        ).ratio() * 100
+        # Analyze target file
+        logging.debug(f"Analyzing target file: {self.target_path}")
+        target_data = {
+            "metadata": self.extract_metadata(self.target_path),
+            "content": self.analyze_content(self.target_path),
+            "ooxml": self.analyze_ooxml_structure(self.target_path),
+            "binary": self.analyze_binary_content(self.target_path)
+        }
+        logging.debug("Target file analysis complete")
+        
+        # Analyze same-origin file
+        logging.debug(f"Analyzing same-origin file: {self.same_origin_path}")
+        same_origin_data = {
+            "metadata": self.extract_metadata(self.same_origin_path),
+            "content": self.analyze_content(self.same_origin_path),
+            "ooxml": self.analyze_ooxml_structure(self.same_origin_path),
+            "binary": self.analyze_binary_content(self.same_origin_path)
+        }
+        logging.debug("Same-origin file analysis complete")
+        
+        # Find origin evidence
+        logging.debug("Finding origin evidence...")
+        evidence = self.find_origin_evidence()
+        
+        # Perform statistical analysis
+        logging.debug("Starting statistical analysis...")
+        try:
+            statistical_results = self.statistical_analyzer.analyze_similarity(
+                target_data["content"],
+                same_origin_data["content"]
+            )
+            logging.debug("Statistical analysis complete")
+        except Exception as e:
+            logging.error(f"Error in statistical analysis: {str(e)}")
+            statistical_results = {"error": str(e)}
         
         return {
-            "similarity_scores": {
-                "same_origin": round(same_origin_similarity, 2)
-            },
-            "shared_styles": {
-                "same_origin": list(set(target_content["styles"]) & set(same_origin_content["styles"]))
-            },
-            "shared_fonts": {
-                "same_origin": list(set(target_content["fonts_used"]) & set(same_origin_content["fonts_used"]))
-            }
+            "target_metadata": target_data["metadata"],
+            "same_origin_metadata": same_origin_data["metadata"],
+            "origin_evidence": evidence,
+            "statistical_analysis": statistical_results
         }
 
-    def generate_report(self) -> Tuple[Dict[str, Any], str]:
+    def generate_report(self) -> Dict[str, Any]:
         """Generate the complete analysis report and summary."""
+        # Validate files first
+        self.validate_files()
+        
+        # Analyze documents
+        target_data = self.analyze_document(self.target_path)
+        same_origin_data = self.analyze_document(self.same_origin_path)
+        
+        # Find origin evidence
+        origin_evidence = self.find_origin_evidence()
+        
+        # Perform statistical analysis
+        statistical_analysis = self.statistical_analyzer.analyze_similarity(target_data, same_origin_data)
+        
+        # Generate report with metadata analysis
         report = {
-            "analysis_timestamp": datetime.now().isoformat(),
-            "target_file": str(self.target_path),
-            "same_origin_file": str(self.same_origin_path),
+            "origin_evidence": origin_evidence,
+            "statistical_analysis": statistical_analysis,
             "metadata_analysis": {
-                "target": self.extract_metadata(self.target_path),
-                "same_origin": self.extract_metadata(self.same_origin_path)
-            },
-            "content_analysis": {
-                "target": self.analyze_content(self.target_path),
-                "comparisons": self.compare_files()
-            },
-            "ooxml_analysis": {
-                "target": self.analyze_ooxml_structure(self.target_path),
-                "same_origin": self.analyze_ooxml_structure(self.same_origin_path)
-            },
-            "binary_analysis": {
-                "target": self.analyze_binary_content(self.target_path),
-                "same_origin": self.analyze_binary_content(self.same_origin_path)
+                "target": target_data.get("metadata", {}),
+                "same_origin": same_origin_data.get("metadata", {})
             }
         }
         
-        # Add statistical analysis
-        try:
-            target_data = {
-                "metadata": report["metadata_analysis"]["target"],
-                "content": report["content_analysis"]["target"],
-                "ooxml": report["ooxml_analysis"]["target"],
-                "binary": report["binary_analysis"]["target"]
-            }
-            same_origin_data = {
-                "metadata": report["metadata_analysis"]["same_origin"],
-                "content": self.analyze_content(self.same_origin_path),  # Get content directly
-                "ooxml": report["ooxml_analysis"]["same_origin"],
-                "binary": report["binary_analysis"]["same_origin"]
-            }
-            statistical_results = self.statistical_analyzer.analyze_similarity(
-                target_data=target_data,
-                same_origin_data=same_origin_data
-            )
-            report["statistical_analysis"] = statistical_results
-        except Exception as e:
-            logging.error(f"Error performing statistical analysis: {str(e)}")
-            report["statistical_analysis"] = {"error": str(e)}
-        
-        # Generate natural language summary
+        # Generate summary
         summary = self._generate_summary(report)
+        report["summary"] = summary
         
-        return report, summary
+        return report
 
     def _get_cache_key(self, report: Dict[str, Any]) -> str:
-        """Generate a cache key based on the report content."""
-        # Only use relevant parts of the report for the cache key
+        """Generate a cache key for the report."""
         key_data = {
-            'evidence': report['origin_evidence'],
-            'metadata': report['metadata_analysis'],
-            'binary': report['binary_analysis']
+            'target': str(self.target_path),
+            'same_origin': str(self.same_origin_path),
+            'reference_count': len(self.reference_files),
+            'origin_evidence': report['origin_evidence'],
+            'statistical': report.get('statistical_analysis', {}),
+            'metadata': report.get('metadata_analysis', {})
         }
         return hashlib.md5(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
 
@@ -572,7 +636,7 @@ class WordForensicAnalyzer:
         """Try to get a cached summary."""
         cache_file = self.cache_dir / f"{cache_key}.txt"
         if cache_file.exists():
-            logging.info("Using cached summary")
+            logging.debug("Using cached summary")
             return cache_file.read_text()
         return None
 
@@ -580,20 +644,20 @@ class WordForensicAnalyzer:
         """Cache a successful summary."""
         cache_file = self.cache_dir / f"{cache_key}.txt"
         cache_file.write_text(summary)
-        logging.info("Cached summary for future use")
+        logging.debug("Cached summary for future use")
 
     def _generate_summary(self, report: Dict[str, Any]) -> str:
         """Generate a natural language summary using OpenAI API with caching and improved retry logic."""
-        # Try to get cached summary first
         cache_key = self._get_cache_key(report)
         cached_summary = self._get_cached_summary(cache_key)
         if cached_summary:
+            logging.debug("Using cached summary")
             return cached_summary
 
+        # Create a more concise prompt
         evidence = report["origin_evidence"]
         statistical = report.get("statistical_analysis", {})
         
-        # Create a more concise prompt
         prompt = (
             "Analyze Word document forensics evidence:\n"
             f"Definitive markers: {len(evidence.get('definitive_markers', []))}\n"
@@ -601,10 +665,6 @@ class WordForensicAnalyzer:
             f"Potential indicators: {len(evidence.get('potential_indicators', []))}\n\n"
             "Statistical Analysis:\n"
             f"{json.dumps(statistical.get('statistical_summary', {}), indent=2)}\n\n"
-            "Key metadata matches:\n"
-            f"{json.dumps(evidence.get('metadata_matches', {}), indent=2)}\n\n"
-            "Binary signatures:\n"
-            f"{json.dumps(evidence.get('binary_signatures', {}), indent=2)}\n\n"
             "Provide:\n"
             "1. Conclusion on shared origin\n"
             "2. Evidence strength (definitive/strong/potential)\n"
@@ -614,12 +674,11 @@ class WordForensicAnalyzer:
             "6. Further investigation needs"
         )
 
-        max_retries = 5
-        base_delay = 60  # 1 minute
+        max_retries = 3
         
         for attempt in range(max_retries):
             try:
-                print(f"\nAttempting to generate AI summary (attempt {attempt + 1}/{max_retries})...")
+                logging.debug(f"Generating AI summary (attempt {attempt + 1}/{max_retries})...")
                 response = self.client.chat.completions.create(
                     model="gpt-4",
                     messages=[
@@ -630,99 +689,74 @@ class WordForensicAnalyzer:
                     temperature=0.3
                 )
                 summary = response.choices[0].message.content
-                # Cache successful response
                 self._cache_summary(cache_key, summary)
-                logging.info("AI summary generated successfully")
                 return summary
+                
             except Exception as e:
-                if "rate limit" in str(e).lower():
-                    if attempt < max_retries - 1:
-                        wait_time = base_delay * (2 ** attempt)  # Exponential backoff
-                        logging.warning(f"Rate limit hit. Waiting {wait_time} seconds before retry {attempt + 1}/{max_retries}")
-                        print(f"\nRate limit reached. Waiting {wait_time} seconds before retrying...")
-                        print(f"(You can press Ctrl+C to skip to template-based summary)")
-                        try:
-                            time.sleep(wait_time)
-                            continue
-                        except KeyboardInterrupt:
-                            print("\nSkipping to template-based summary...")
-                            break
-                logging.error(f"Error generating AI summary: {str(e)}")
-                print(f"\nError generating AI summary: {str(e)}")
-                break
+                logging.error(f"Error generating summary: {str(e)}")
+                if attempt == max_retries - 1:
+                    logging.warning("Falling back to template summary")
+                    return self._generate_template_summary(report)
+                time.sleep(2 ** attempt)  # Exponential backoff
 
-        print("Falling back to template-based summary...")
         return self._generate_template_summary(report)
 
     def _generate_template_summary(self, report: Dict[str, Any]) -> str:
         """Fallback template-based summary generator."""
+        summary_lines = [
+            "Word Document Forensics Analysis Summary",
+            "=====================================",
+            "",
+            "1. Origin Analysis Conclusion:",
+        ]
+        
+        # Extract evidence
         evidence = report["origin_evidence"]
-        statistical = report.get("statistical_analysis", {})
+        definitive = evidence.get("definitive_markers", [])
+        strong = evidence.get("strong_indicators", [])
+        potential = evidence.get("potential_indicators", [])
         
-        summary_lines = []
+        # Determine overall conclusion
+        if definitive:
+            summary_lines.append("DEFINITIVE EVIDENCE of shared origin found.")
+        elif strong:
+            summary_lines.append("STRONG INDICATORS of shared origin detected.")
+        elif potential:
+            summary_lines.append("POTENTIAL INDICATORS of shared origin present.")
+        else:
+            summary_lines.append("No clear evidence of shared origin found.")
         
-        # Add statistical analysis results if available
-        if "statistical_summary" in statistical:
-            stats = statistical["statistical_summary"]
-            summary_lines.extend([
-                "Statistical Analysis Results:",
-                f"- Similarity Percentile: {stats['similarity_percentile']:.1f}%",
-                f"- Z-Score: {stats['z_score']:.2f}",
-                f"- Likelihood Ratio: {stats['likelihood_ratio']:.2f}",
-                f"- Reference Sample Size: {stats['reference_sample_size']}",
-                "",
-                "Statistical Interpretation:",
-                statistical["interpretation"]["percentile_interpretation"],
-                statistical["interpretation"]["z_score_interpretation"],
-                statistical["interpretation"]["likelihood_interpretation"],
-                statistical["interpretation"]["confidence_note"] if statistical["interpretation"]["confidence_note"] else "",
-                ""
-            ])
-
-        # Add evidence summary
         summary_lines.extend([
-            "1. Conclusion on shared origin:",
-            "Based on the available evidence, " + (
-                "there is definitive proof" if evidence.get("definitive_markers", []) else
-                "there are strong indicators" if evidence.get("strong_indicators", []) else
-                "it is possible"
-            ) + " that the Word documents share a common origin. " +
-            f"Found {len(evidence.get('definitive_markers', []))} definitive markers, " +
-            f"{len(evidence.get('strong_indicators', []))} strong indicators, and " +
-            f"{len(evidence.get('potential_indicators', []))} potential indicators.",
             "",
-            "2. Evidence strength:",
-            "The evidence strength is " + (
-                "definitive" if evidence.get("definitive_markers", []) else
-                "strong" if evidence.get("strong_indicators", []) else
-                "potential to strong" if len(evidence.get("potential_indicators", [])) > 10 else
-                "potential"
-            ) + ". " + (
-                "There are definitive markers that prove shared origin." if evidence.get("definitive_markers", []) else
-                "There are strong indicators but no definitive proof." if evidence.get("strong_indicators", []) else
-                f"There are {len(evidence.get('potential_indicators', []))} potential indicators suggesting shared origin."
-            ),
-            "",
-            "3. Key technical markers:",
-            "The key technical markers in this case are:",
+            "2. Evidence Strength:",
+            f"- Definitive Markers: {len(definitive)}",
+            f"- Strong Indicators: {len(strong)}",
+            f"- Potential Indicators: {len(potential)}"
         ])
         
-        # Add definitive markers
-        for marker in evidence.get("definitive_markers", []):
-            summary_lines.append(f"- [DEFINITIVE] {marker['explanation']}")
+        # Add key markers
+        summary_lines.extend([
+            "",
+            "3. Key Technical Markers:"
+        ])
         
-        # Add strong indicators
-        for indicator in evidence.get("strong_indicators", []):
-            summary_lines.append(f"- [STRONG] {indicator['explanation']}")
-        
-        # Add top potential indicators (limit to 5)
-        top_potential = evidence.get("potential_indicators", [])[:5]
-        if top_potential:
-            summary_lines.append("\nTop potential indicators:")
-            for indicator in top_potential:
+        if definitive:
+            summary_lines.append("\nDefinitive markers:")
+            for marker in definitive:
+                summary_lines.append(f"- {marker['explanation']}")
+                
+        if strong:
+            summary_lines.append("\nStrong indicators:")
+            for indicator in strong:
+                summary_lines.append(f"- {indicator['explanation']}")
+                
+        if potential:
+            summary_lines.append("\nPotential indicators:")
+            for indicator in potential:
                 summary_lines.append(f"- {indicator['explanation']}")
         
         # Add statistical confidence
+        statistical = report.get("statistical_analysis", {})
         if "statistical_summary" in statistical:
             stats = statistical["statistical_summary"]
             confidence = (
@@ -733,16 +767,14 @@ class WordForensicAnalyzer:
             )
             summary_lines.extend([
                 "",
-                "4. Statistical confidence:",
+                "4. Statistical Confidence:",
                 f"Based on statistical analysis, there is a {confidence} level of confidence " +
-                f"({stats['likelihood_ratio']*100:.1f}%) that the documents share a common origin. " +
-                f"This is supported by a similarity score in the {stats['similarity_percentile']:.1f}th percentile " +
-                f"compared to the reference set of {stats['reference_sample_size']} documents."
+                f"({stats['likelihood_ratio']*100:.1f}%) that the documents share a common origin."
             ])
         else:
             summary_lines.extend([
                 "",
-                "4. Statistical confidence:",
+                "4. Statistical Confidence:",
                 "Statistical analysis was not available for this comparison."
             ])
         
@@ -754,7 +786,7 @@ class WordForensicAnalyzer:
             "- Statistical analysis is based on available reference documents",
             "- Binary signatures and paths may be system-dependent",
             "",
-            "6. Further investigation needs:",
+            "6. Further Investigation Needs:",
             "- Expand reference document dataset for more robust statistical analysis",
             "- Perform deeper analysis of document structure and formatting",
             "- Consider timeline analysis of document modifications",
@@ -763,81 +795,83 @@ class WordForensicAnalyzer:
         
         return "\n".join(summary_lines)
 
-def find_docx_files(directory: Path) -> List[Path]:
-    """Find all .docx files in a directory."""
-    if not directory.exists():
-        directory.mkdir(parents=True, exist_ok=True)
-        return []
-    return list(directory.glob("*.docx"))
+    def find_docx_files(self, directory: Path) -> List[Path]:
+        """Find all .docx files in a directory."""
+        if not directory.is_dir():
+            raise ValueError(f"Not a directory: {directory}")
+        return list(directory.glob("*.docx"))
 
-def main():
-    # Define default directories
-    base_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    input_dir = base_dir / "input"
-    target_dir = input_dir / "target"
-    same_origin_dir = input_dir / "same_origin"
-    reference_dir = input_dir / "reference"
-    output_dir = base_dir / "output"  # Update output directory to be within project
-
-    # Create directories if they don't exist
-    for dir_path in [target_dir, same_origin_dir, reference_dir, output_dir]:
-        dir_path.mkdir(parents=True, exist_ok=True)
-
-    # Find .docx files in each directory
-    target_files = find_docx_files(target_dir)
-    same_origin_files = find_docx_files(same_origin_dir)
-    reference_files = find_docx_files(reference_dir)
-
-    if not target_files:
-        print(f"\nNo target files found in {target_dir}")
-        print("Please place your target Word document in the 'input/target' directory.")
-        sys.exit(1)
-
-    if not same_origin_files:
-        print(f"\nNo same-origin files found in {same_origin_dir}")
-        print("Please place your suspected same-origin Word document in the 'input/same_origin' directory.")
-        sys.exit(1)
-
-    if not reference_files:
-        print(f"\nNo reference files found in {reference_dir}")
-        print("Please place your reference Word document in the 'input/reference' directory.")
-        sys.exit(1)
-
-    # Use the first file from each directory
-    target_file = target_files[0]
-    same_origin_file = same_origin_files[0]
-    reference_file = reference_files[0]
-
-    print("\nAnalyzing the following files:")
-    print(f"Target file: {target_file.name}")
-    print(f"Same-origin file: {same_origin_file.name}")
-    print(f"Reference file: {reference_file.name}")
-
+def main(debug: bool = False) -> None:
+    """Main function to run the Word document forensics analysis."""
     try:
-        analyzer = WordForensicAnalyzer(
-            str(target_file),
-            str(same_origin_file),
-            str(reference_file)
-        )
-        analyzer.validate_files()
-        report, summary = analyzer.generate_report()
+        parser = argparse.ArgumentParser(description="Word Document Forensics Analysis")
+        parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+        args = parser.parse_args()
         
-        # Save JSON report
-        output_json = analyzer.output_dir / f"{Path(target_file).stem}_analysis.json"
-        with open(output_json, 'w') as f:
-            json.dump(report, f, indent=2)
+        print("Analyzing documents for shared origin...")
         
-        # Save summary
-        output_txt = analyzer.output_dir / f"{Path(target_file).stem}_summary.txt"
-        with open(output_txt, 'w') as f:
-            f.write(summary)
+        # Set up paths
+        project_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+        input_dir = project_dir / "input"
+        target_dir = input_dir / "target"
+        same_origin_dir = input_dir / "same_origin"
+        reference_dir = input_dir / "reference"
+        output_dir = project_dir / "output"
         
-        print("\nAnalysis complete!")
-        print("Results saved to:")
-        print(f"  - JSON report: {output_json}")
-        print(f"  - Summary: {output_txt}")
+        # Create directories if they don't exist
+        for dir_path in [input_dir, target_dir, same_origin_dir, reference_dir, output_dir]:
+            dir_path.mkdir(parents=True, exist_ok=True)
+            
+        # Find documents
+        target_files = list(target_dir.glob("*.docx"))
+        same_origin_files = list(same_origin_dir.glob("*.docx"))
+        reference_files = list(reference_dir.glob("*.docx"))
+        
+        if not target_files:
+            raise ValueError(f"No target documents found in {target_dir}")
+        if not same_origin_files:
+            raise ValueError(f"No same-origin documents found in {same_origin_dir}")
+            
+        target_file = target_files[0]
+        same_origin_file = same_origin_files[0]
+        
+        # Initialize and run analysis
+        def run_analysis():
+            analyzer = WordForensicAnalyzer(
+                target_path=str(target_file),
+                same_origin_path=str(same_origin_file),
+                reference_files=[str(file) for file in reference_files]
+            )
+            
+            # Generate report
+            report = analyzer.generate_report()
+            
+            # Save report and summary
+            report_file = output_dir / "analysis_report.json"
+            with open(report_file, "w") as f:
+                json.dump(report, f, indent=2)
+                
+            summary_file = output_dir / "analysis_summary.txt"
+            with open(summary_file, "w") as f:
+                f.write(report["summary"])
+                
+            return True
+            
+        # Run with or without debug mode
+        if args.debug:
+            from debugging.handlers import DebugHandler
+            with DebugHandler() as debug_handler:
+                success = debug_handler.wrap(run_analysis)()
+        else:
+            success = run_analysis()
+            
+        if success:
+            print("Analysis complete. Results saved to: output/")
+            
     except Exception as e:
-        print(f"\nError: {str(e)}")
+        print(f"Error: {str(e)}")
+        if args.debug:
+            logging.error(str(e), exc_info=True)
         sys.exit(1)
 
 if __name__ == "__main__":

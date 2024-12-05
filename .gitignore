@@ -28,7 +28,7 @@ wheels/
 venv/
 ENV/
 
-# Input/Output files (keep directories)
+# Input/Output/Cache directories (keep directories)
 input/*
 !input/.gitkeep
 !input/target/.gitkeep
@@ -36,9 +36,24 @@ input/*
 !input/reference/.gitkeep
 output/*
 !output/.gitkeep
+cache/*
+!cache/.gitkeep
+reference_docs/*
+!reference_docs/.gitkeep
+
+# Debug logs and analysis
+debugging/logs/*
+!debugging/logs/.gitkeep
 
 # IDE specific files
 .idea/
 .vscode/
 *.swp
 .DS_Store
+
+# Test artifacts
+.coverage
+htmlcov/
+.pytest_cache/
+__pycache__/
+*.pyc

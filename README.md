@@ -1,18 +1,30 @@
 # Word Document Forensics Tool
 
-A comprehensive forensic analysis tool for comparing Word documents and determining their origin.
+A forensic analysis tool specifically designed for analyzing DOCX files (modern Word documents) to determine whether they were created or saved on the same machine. The tool uses statistical analysis and machine learning techniques to identify machine-specific patterns in DOCX file structures, even in the absence of clear metadata like "author" or "company". By comparing against a set of reference DOCX files (known to be from different machines), the tool can demonstrate the statistical unlikelihood of two documents originating from different machines.
 
 ## Directory Structure
 
 ```
 word_forensics/
-├── input/
-│   ├── target/        # Place the primary document under analysis here
-│   ├── same_origin/   # Place documents suspected to share the same origin here
-│   └── reference/     # Place known different-origin reference documents here
-├── output/            # Analysis results will be saved here
-├── .env              # Environment file containing OpenAI API key
-└── forensic_analysis.py
+├── debugging/              # Debug system components
+│   ├── handlers/          # Debug handlers and utilities
+│   ├── logs/             # Debug logs and analysis reports
+│   └── README.md         # Debug system documentation
+├── statistical/           # Statistical analysis modules
+│   ├── analyzer.py       # Core statistical analysis
+│   ├── calculator.py     # Statistical calculations
+│   ├── feature_extractor.py  # Feature extraction
+│   └── metadata_pairwise_analyzer.py  # Metadata analysis
+├── tests/                # Test files and test data
+├── input/                # Input documents
+│   ├── target/          # Place the primary DOCX file under analysis here
+│   ├── same_origin/     # Place DOCX files suspected to share the same origin here
+│   └── reference/       # Place known different-origin reference DOCX files here
+├── output/              # Analysis results will be saved here
+├── cache/               # Cache for analysis results and AI summaries
+├── reference_docs/      # Reference documents for analysis
+├── .env                # Environment file containing OpenAI API key
+└── forensic_analysis.py  # Main entry point
 ```
 
 ## Setup
@@ -39,23 +51,25 @@ OPENAI_API_KEY=your_api_key_here
 
 ## Usage
 
-1. Place your Word documents in their respective directories:
-   - Primary document → `input/target/`
-   - Suspected same-origin document → `input/same_origin/`
-   - Reference document → `input/reference/`
+1. Place your DOCX files in their respective directories:
+   - Primary DOCX file → `input/target/`
+   - Suspected same-origin DOCX file → `input/same_origin/`
+   - Reference DOCX files → `input/reference/`
 
 2. Run the analysis:
 ```bash
+# Normal mode - minimal console output
 python forensic_analysis.py
+
+# Debug mode - comprehensive logging and analysis
+python forensic_analysis.py --debug
 ```
 
 The tool will:
-- Automatically detect .docx files in each input directory
-- Use the first file found in each directory for analysis
-- Generate detailed reports in the `output` directory:
-  - JSON report with comprehensive analysis
-  - Text summary with key findings and conclusions
-  - Cached AI summaries for faster subsequent runs
+- Automatically detect and analyze only DOCX files in each input directory
+- Use the first DOCX file found in each directory for analysis
+- Generate detailed reports in the `output` directory
+- In debug mode, generate additional logs and analysis in `debugging/logs/`
 
 ## Analysis Output
 
@@ -69,40 +83,74 @@ The tool performs comprehensive analysis including:
 Results are saved as:
 - `output/<filename>_analysis.json`: Detailed technical analysis
 - `output/<filename>_summary.txt`: Human-readable summary
+- When in debug mode:
+  - `debugging/logs/debug_<timestamp>.log`: Detailed debug logs
+  - `debugging/logs/debug_analysis_<timestamp>.txt`: AI-powered log analysis
+
+## Debug Mode
+
+The tool includes a comprehensive debugging system that can be activated with the `--debug` flag. This system:
+
+1. **Non-Intrusive Logging**
+   - Captures detailed information about the analysis process
+   - Maintains minimal console output
+   - Stores all debug information in dedicated log files
+
+2. **Performance Tracking**
+   - Monitors execution time of key operations
+   - Tracks resource usage
+   - Identifies potential bottlenecks
+
+3. **AI-Powered Log Analysis**
+   - Automatically analyzes debug logs
+   - Provides insights about errors and warnings
+   - Suggests potential improvements
+   - Summarizes the most important events
+
+4. **Debug Reports**
+   - Generated in `debugging/logs/`
+   - Include both raw logs and analyzed summaries
+   - Preserve full context for troubleshooting
+
+The debug system is designed to be:
+- Non-intrusive to normal operation
+- Comprehensive in data collection
+- Helpful for development and troubleshooting
+- Easy to activate when needed
 
 ## How It Works
 
-The Word Forensics tool uses advanced statistical and forensic techniques to analyze Word documents and determine their origin. Here's how the analysis works:
+The Word Forensics tool uses advanced statistical and forensic techniques to analyze DOCX files and determine whether they were created or modified on the same machine. Here's how the analysis works:
 
 ### 1. Document Analysis Layers
 
+#### Machine Signature Analysis
+- Identifies machine-specific patterns in DOCX file structure and formatting
+- Detects system-level markers that persist regardless of content
+- Analyzes template and default setting patterns unique to specific machines
+
 #### Metadata Analysis
-- Extracts and compares document properties (author, timestamps, revision counts)
-- Identifies matching patterns in metadata fields
-- Detects inconsistencies or modifications in metadata
+- Extracts and compares document properties while accounting for potential manipulation
+- Identifies consistent patterns in how the machine writes metadata
+- Detects system-specific timestamps and encoding patterns
 
-#### Content Analysis
-- Analyzes document structure (paragraphs, sections, styles)
-- Compares text content using statistical similarity measures
-- Examines formatting patterns and document organization
-
-#### Binary Analysis
-- Examines raw .docx file structure and signatures
-- Analyzes embedded resources and media
-- Detects system markers and template patterns
+#### Content-Independent Analysis
+- Analyzes DOCX file structure independently of user-created content
+- Compares binary patterns that are machine-specific
+- Examines formatting and style defaults set by the system
 
 #### OOXML Structure Analysis
-- Analyzes internal XML structure of .docx files
+- Analyzes internal XML structure patterns specific to machine configurations
 - Compares relationship patterns between document parts
-- Examines content type definitions and custom properties
+- Examines content type definitions and machine-specific properties
 
 ### 2. Statistical Analysis
 
-The tool employs advanced statistical techniques:
-- Principal Component Analysis (PCA) for feature extraction
-- Z-score calculations for anomaly detection
-- Similarity percentile computation
-- Likelihood ratio analysis
+The tool employs advanced statistical techniques to prove or disprove same-machine origin:
+- Statistical comparison against reference DOCX files from known different machines
+- Calculation of likelihood ratios for same-machine vs different-machine scenarios
+- Confidence intervals based on reference document variations
+- Analysis of machine-specific feature distributions
 
 ### 3. Evidence Classification
 
@@ -114,9 +162,9 @@ Findings are classified into three confidence levels:
 ### 4. AI-Enhanced Analysis
 
 The tool uses OpenAI's API to:
+- Identify subtle machine-specific patterns in DOCX file structure
 - Generate human-readable interpretations of technical findings
-- Identify subtle patterns in document structure
-- Provide context-aware analysis of similarities
+- Analyze the statistical significance of detected patterns
 
 ### 5. Caching and Performance
 
@@ -127,9 +175,10 @@ The tool uses OpenAI's API to:
 ## Advanced Features
 
 ### Reference Document Analysis
-- Uses multiple reference documents to establish baseline patterns
-- Calculates statistical significance of similarities
-- Identifies common vs. unique document characteristics
+- Uses multiple reference DOCX files (known to be from different machines) as a baseline
+- Establishes statistical significance of machine-specific patterns
+- Quantifies the likelihood of detected similarities occurring between documents from different machines
+- Provides confidence levels based on reference document variation
 
 ### Feature Importance Ranking
 - Ranks evidence by statistical significance
