@@ -23,16 +23,33 @@ from statistical_analysis import ForensicStatisticalAnalyzer
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class WordForensicAnalyzer:
-    def __init__(self, target_path: str, same_origin_path: str, reference_path: str, output_dir: str):
+    def __init__(self, target_path: str, same_origin_path: str, reference_path: str):
+        """Initialize the analyzer with paths to documents for comparison."""
         load_dotenv()
-        self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        # Initialize OpenAI client with minimal configuration
+        api_key = os.getenv('OPENAI_API_KEY')
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+            
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.openai.com/v1",  # Explicitly set the base URL
+            timeout=60.0,  # Set a reasonable timeout
+            max_retries=3  # Set max retries
+        )
+        
         self.target_path = Path(target_path)
         self.same_origin_path = Path(same_origin_path)
         self.reference_path = Path(reference_path)
-        self.output_dir = Path(output_dir)
-        self.cache_dir = Path(output_dir) / '.cache'
+        
+        # Create output directory within project structure
+        self.output_dir = Path(os.path.dirname(os.path.abspath(__file__))) / "output"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Cache directory for storing intermediate results
+        self.cache_dir = self.output_dir / ".cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.validate_files()
         
         # Initialize statistical analyzer
         self.statistical_analyzer = ForensicStatisticalAnalyzer(
@@ -42,16 +59,13 @@ class WordForensicAnalyzer:
         self.statistical_analyzer.set_analyzer(self)
         
     def validate_files(self) -> None:
-        """Validate existence and format of input files and output directory."""
+        """Validate existence and format of input files."""
         # Validate input files
         for file_path in [self.target_path, self.same_origin_path, self.reference_path]:
             if not file_path.exists():
                 raise FileNotFoundError(f"File not found: {file_path}")
             if file_path.suffix.lower() != '.docx':
                 raise ValueError(f"Invalid file format for {file_path}. Must be .docx")
-        
-        # Create output directory if it doesn't exist
-        self.output_dir.mkdir(parents=True, exist_ok=True)
         
     def extract_metadata(self, docx_path: Path) -> Dict[str, Any]:
         """Extract metadata from a Word document."""
@@ -544,9 +558,21 @@ class WordForensicAnalyzer:
         
         # Add statistical analysis
         try:
+            target_data = {
+                "metadata": report["metadata_analysis"]["target"],
+                "content": report["content_analysis"]["target"],
+                "ooxml": report["ooxml_analysis"]["target"],
+                "binary": report["binary_analysis"]["target"]
+            }
+            same_origin_data = {
+                "metadata": report["metadata_analysis"]["same_origin"],
+                "content": self.analyze_content(self.same_origin_path),  # Get content directly
+                "ooxml": report["ooxml_analysis"]["same_origin"],
+                "binary": report["binary_analysis"]["same_origin"]
+            }
             statistical_results = self.statistical_analyzer.analyze_similarity(
-                target_data=report,
-                same_origin_data=report
+                target_data=target_data,
+                same_origin_data=same_origin_data
             )
             report["statistical_analysis"] = statistical_results
         except Exception as e:
@@ -656,56 +682,110 @@ class WordForensicAnalyzer:
 
     def _generate_template_summary(self, report: Dict[str, Any]) -> str:
         """Fallback template-based summary generator."""
-        target_metadata = report["metadata_analysis"]["target"]
-        comparisons = report["content_analysis"]["comparisons"]
         evidence = report["origin_evidence"]
+        statistical = report.get("statistical_analysis", {})
         
-        summary_lines = [
-            f"Forensic Analysis Summary for {self.target_path.name}",
-            "-" * 50,
-            f"\nDocument Information:",
-            f"- Author: {target_metadata.get('author', 'Unknown')}",
-            f"- Created: {target_metadata.get('created', 'Unknown')}",
-            f"- Last Modified: {target_metadata.get('modified', 'Unknown')}",
-            f"- Last Modified By: {target_metadata.get('last_modified_by', 'Unknown')}",
-            
-            f"\nComparative Analysis:",
-            f"- Similarity with suspected same-origin file: {comparisons['similarity_scores']['same_origin']}%",
-            f"- Similarity with reference file: {comparisons['similarity_scores']['reference']}%",
-            
-            f"\nDefinitive Markers ({len(evidence.get('definitive_markers', []))} found):",
-        ]
+        summary_lines = []
+        
+        # Add statistical analysis results if available
+        if "statistical_summary" in statistical:
+            stats = statistical["statistical_summary"]
+            summary_lines.extend([
+                "Statistical Analysis Results:",
+                f"- Similarity Percentile: {stats['similarity_percentile']:.1f}%",
+                f"- Z-Score: {stats['z_score']:.2f}",
+                f"- Likelihood Ratio: {stats['likelihood_ratio']:.2f}",
+                f"- Reference Sample Size: {stats['reference_sample_size']}",
+                "",
+                "Statistical Interpretation:",
+                statistical["interpretation"]["percentile_interpretation"],
+                statistical["interpretation"]["z_score_interpretation"],
+                statistical["interpretation"]["likelihood_interpretation"],
+                statistical["interpretation"]["confidence_note"] if statistical["interpretation"]["confidence_note"] else "",
+                ""
+            ])
+
+        # Add evidence summary
+        summary_lines.extend([
+            "1. Conclusion on shared origin:",
+            "Based on the available evidence, " + (
+                "there is definitive proof" if evidence.get("definitive_markers", []) else
+                "there are strong indicators" if evidence.get("strong_indicators", []) else
+                "it is possible"
+            ) + " that the Word documents share a common origin. " +
+            f"Found {len(evidence.get('definitive_markers', []))} definitive markers, " +
+            f"{len(evidence.get('strong_indicators', []))} strong indicators, and " +
+            f"{len(evidence.get('potential_indicators', []))} potential indicators.",
+            "",
+            "2. Evidence strength:",
+            "The evidence strength is " + (
+                "definitive" if evidence.get("definitive_markers", []) else
+                "strong" if evidence.get("strong_indicators", []) else
+                "potential to strong" if len(evidence.get("potential_indicators", [])) > 10 else
+                "potential"
+            ) + ". " + (
+                "There are definitive markers that prove shared origin." if evidence.get("definitive_markers", []) else
+                "There are strong indicators but no definitive proof." if evidence.get("strong_indicators", []) else
+                f"There are {len(evidence.get('potential_indicators', []))} potential indicators suggesting shared origin."
+            ),
+            "",
+            "3. Key technical markers:",
+            "The key technical markers in this case are:",
+        ])
         
         # Add definitive markers
-        for marker in evidence.get('definitive_markers', []):
-            summary_lines.append(f"- {marker['explanation']}: {marker['value']}")
-        
-        summary_lines.extend([
-            f"\nStrong Indicators ({len(evidence.get('strong_indicators', []))} found):",
-        ])
+        for marker in evidence.get("definitive_markers", []):
+            summary_lines.append(f"- [DEFINITIVE] {marker['explanation']}")
         
         # Add strong indicators
-        for indicator in evidence.get('strong_indicators', []):
-            summary_lines.append(f"- {indicator['explanation']}: {indicator['value']}")
+        for indicator in evidence.get("strong_indicators", []):
+            summary_lines.append(f"- [STRONG] {indicator['explanation']}")
         
-        summary_lines.extend([
-            f"\nShared Characteristics:",
-            "- Shared style elements: " + 
-            ", ".join(comparisons['shared_styles']['same_origin']),
-            
-            "- Shared fonts: " + 
-            ", ".join(comparisons['shared_fonts']['same_origin']),
-            
-            f"\nConclusion:",
-            "Based on the analysis:"
-        ])
+        # Add top potential indicators (limit to 5)
+        top_potential = evidence.get("potential_indicators", [])[:5]
+        if top_potential:
+            summary_lines.append("\nTop potential indicators:")
+            for indicator in top_potential:
+                summary_lines.append(f"- {indicator['explanation']}")
         
-        if evidence.get('definitive_markers', []):
-            summary_lines.append("DEFINITIVE EVIDENCE found indicating shared origin.")
-        elif evidence.get('strong_indicators', []):
-            summary_lines.append("STRONG INDICATORS suggest shared origin, but not definitive proof.")
+        # Add statistical confidence
+        if "statistical_summary" in statistical:
+            stats = statistical["statistical_summary"]
+            confidence = (
+                "very high" if stats["likelihood_ratio"] > 0.9 else
+                "high" if stats["likelihood_ratio"] > 0.7 else
+                "moderate" if stats["likelihood_ratio"] > 0.5 else
+                "low"
+            )
+            summary_lines.extend([
+                "",
+                "4. Statistical confidence:",
+                f"Based on statistical analysis, there is a {confidence} level of confidence " +
+                f"({stats['likelihood_ratio']*100:.1f}%) that the documents share a common origin. " +
+                f"This is supported by a similarity score in the {stats['similarity_percentile']:.1f}th percentile " +
+                f"compared to the reference set of {stats['reference_sample_size']} documents."
+            ])
         else:
-            summary_lines.append("No definitive evidence of shared origin found.")
+            summary_lines.extend([
+                "",
+                "4. Statistical confidence:",
+                "Statistical analysis was not available for this comparison."
+            ])
+        
+        # Add caveats and recommendations
+        summary_lines.extend([
+            "",
+            "5. Caveats:",
+            "- Metadata can be manipulated and should not be solely relied upon",
+            "- Statistical analysis is based on available reference documents",
+            "- Binary signatures and paths may be system-dependent",
+            "",
+            "6. Further investigation needs:",
+            "- Expand reference document dataset for more robust statistical analysis",
+            "- Perform deeper analysis of document structure and formatting",
+            "- Consider timeline analysis of document modifications",
+            "- Analyze any embedded objects or macros"
+        ])
         
         return "\n".join(summary_lines)
 
@@ -723,7 +803,7 @@ def main():
     target_dir = input_dir / "target"
     same_origin_dir = input_dir / "same_origin"
     reference_dir = input_dir / "reference"
-    output_dir = base_dir / "output"
+    output_dir = base_dir / "output"  # Update output directory to be within project
 
     # Create directories if they don't exist
     for dir_path in [target_dir, same_origin_dir, reference_dir, output_dir]:
@@ -763,9 +843,9 @@ def main():
         analyzer = WordForensicAnalyzer(
             str(target_file),
             str(same_origin_file),
-            str(reference_file),
-            str(output_dir)
+            str(reference_file)
         )
+        analyzer.validate_files()
         report, summary = analyzer.generate_report()
         
         # Save JSON report

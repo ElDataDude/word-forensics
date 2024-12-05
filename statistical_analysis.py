@@ -1,12 +1,12 @@
 """Statistical analysis module for Word document forensics."""
 import numpy as np
+import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.metrics import pairwise_distances
-import pandas as pd
-from pathlib import Path
 import json
 import joblib
+from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
 import logging
 
@@ -20,7 +20,7 @@ class DocumentFeatureExtractor:
         
     def _extract_metadata_features(self, doc_data: Dict) -> Dict[str, float]:
         """Extract numerical features from metadata."""
-        metadata = doc_data.get('metadata_analysis', {})
+        metadata = doc_data.get('metadata', {})
         features = {}
         
         # Count non-empty metadata fields
@@ -35,7 +35,7 @@ class DocumentFeatureExtractor:
     
     def _extract_binary_features(self, doc_data: Dict) -> Dict[str, float]:
         """Extract numerical features from binary analysis."""
-        binary = doc_data.get('binary_analysis', {})
+        binary = doc_data.get('binary', {})
         features = {}
         
         # Path statistics
@@ -52,7 +52,7 @@ class DocumentFeatureExtractor:
     
     def _extract_content_features(self, doc_data: Dict) -> Dict[str, float]:
         """Extract numerical features from content analysis."""
-        content = doc_data.get('content_analysis', {})
+        content = doc_data.get('content', {})
         features = {}
         
         # Style and font statistics
@@ -70,7 +70,7 @@ class DocumentFeatureExtractor:
     
     def _extract_ooxml_features(self, doc_data: Dict) -> Dict[str, float]:
         """Extract numerical features from OOXML analysis."""
-        ooxml = doc_data.get('ooxml_analysis', {})
+        ooxml = doc_data.get('ooxml', {})
         features = {}
         
         # Structure statistics
@@ -132,10 +132,10 @@ class ForensicStatisticalAnalyzer:
             raise ValueError("Parent analyzer not set. Call set_analyzer() first.")
         
         analysis = {
-            "metadata_analysis": self.analyzer.extract_metadata(docx_path),
-            "content_analysis": self.analyzer.analyze_content(docx_path),
-            "ooxml_analysis": self.analyzer.analyze_ooxml_structure(docx_path),
-            "binary_analysis": self.analyzer.analyze_binary_content(docx_path)
+            "metadata": self.analyzer.extract_metadata(docx_path),
+            "content": self.analyzer.analyze_content(docx_path),
+            "ooxml": self.analyzer.analyze_ooxml_structure(docx_path),
+            "binary": self.analyzer.analyze_binary_content(docx_path)
         }
         return analysis
     
@@ -240,14 +240,36 @@ class ForensicStatisticalAnalyzer:
             }
         except ValueError as ve:
             return {
-                'error': str(ve),
-                'status': 'insufficient_data',
-                'recommendation': 'Add more reference documents to enable statistical analysis'
+                'statistical_summary': {
+                    'similarity_percentile': 0.0,
+                    'z_score': 0.0,
+                    'likelihood_ratio': 0.0,
+                    'reference_sample_size': len(self.reference_docs)
+                },
+                'interpretation': {
+                    'percentile_interpretation': "Statistical analysis failed: insufficient data",
+                    'z_score_interpretation': "Statistical analysis failed: insufficient data",
+                    'likelihood_interpretation': "Statistical analysis failed: insufficient data",
+                    'confidence_note': f"Error: {str(ve)}"
+                },
+                'top_contributing_features': [],
+                'pca_explained_variance': []
             }
         except Exception as e:
-            logging.error(f"Statistical analysis error: {str(e)}")
+            logging.error(f"Error in statistical analysis: {e}")
             return {
-                'error': str(e),
-                'status': 'analysis_failed',
-                'recommendation': 'Check the error message and ensure all documents are properly formatted'
+                'statistical_summary': {
+                    'similarity_percentile': 0.0,
+                    'z_score': 0.0,
+                    'likelihood_ratio': 0.0,
+                    'reference_sample_size': len(self.reference_docs)
+                },
+                'interpretation': {
+                    'percentile_interpretation': "Statistical analysis failed: unexpected error",
+                    'z_score_interpretation': "Statistical analysis failed: unexpected error",
+                    'likelihood_interpretation': "Statistical analysis failed: unexpected error",
+                    'confidence_note': f"Error: {str(e)}"
+                },
+                'top_contributing_features': [],
+                'pca_explained_variance': []
             }
