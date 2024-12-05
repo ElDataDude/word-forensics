@@ -333,15 +333,12 @@ class WordForensicAnalyzer:
         """Find definitive evidence of shared origin between target and same-origin files."""
         target_binary = self.analyze_binary_content(self.target_path)
         same_origin_binary = self.analyze_binary_content(self.same_origin_path)
-        reference_binary = self.analyze_binary_content(self.reference_path)
         
         target_meta = self.extract_metadata(self.target_path)
         same_origin_meta = self.extract_metadata(self.same_origin_path)
-        reference_meta = self.extract_metadata(self.reference_path)
         
         target_content = self.analyze_content(self.target_path)
         same_origin_content = self.analyze_content(self.same_origin_path)
-        reference_content = self.analyze_content(self.reference_path)
         
         evidence = {
             "definitive_markers": [],
@@ -357,23 +354,20 @@ class WordForensicAnalyzer:
         }
         
         # Helper function to find matching paths
-        def find_matching_paths(list1, list2, ref_list):
+        def find_matching_paths(list1, list2):
             shared = set()
             for path1 in list1:
                 for path2 in list2:
-                    # If paths match and aren't in reference file
-                    if path1.lower() == path2.lower() and not any(path1.lower() == ref.lower() for ref in ref_list):
+                    # If paths match
+                    if path1.lower() == path2.lower():
                         shared.add(path1)
             return list(shared)
         
         # Helper function to check metadata matches
-        def check_metadata_match(field: str, target_val, same_origin_val, ref_val) -> bool:
+        def check_metadata_match(field: str, target_val, same_origin_val) -> bool:
             if not target_val or not same_origin_val:
                 return False
-            return (
-                str(target_val).lower() == str(same_origin_val).lower() and
-                (not ref_val or str(ref_val).lower() != str(target_val).lower())
-            )
+            return str(target_val).lower() == str(same_origin_val).lower()
         
         # Check metadata matches
         metadata_fields = {
@@ -390,8 +384,7 @@ class WordForensicAnalyzer:
             if check_metadata_match(
                 field,
                 target_meta.get(field),
-                same_origin_meta.get(field),
-                reference_meta.get(field)
+                same_origin_meta.get(field)
             ):
                 evidence["metadata_matches"][field] = {
                     "value": target_meta[field],
@@ -404,38 +397,34 @@ class WordForensicAnalyzer:
                         "type": "metadata_match",
                         "field": field,
                         "value": target_meta[field],
-                        "explanation": f"Identical {description} found in both target and same-origin files, but not in reference"
+                        "explanation": f"Identical {description} found in both target and same-origin files"
                     })
         
-        # Find shared paths that aren't in reference file
+        # Find shared paths
         evidence["shared_paths"]["user_paths"] = find_matching_paths(
             target_binary["user_paths"],
-            same_origin_binary["user_paths"],
-            reference_binary["user_paths"]
+            same_origin_binary["user_paths"]
         )
         
         evidence["shared_paths"]["template_paths"] = find_matching_paths(
             target_binary["template_paths"],
-            same_origin_binary["template_paths"],
-            reference_binary["template_paths"]
+            same_origin_binary["template_paths"]
         )
         
         evidence["shared_paths"]["system_markers"] = find_matching_paths(
             target_binary["system_markers"],
-            same_origin_binary["system_markers"],
-            reference_binary["system_markers"]
+            same_origin_binary["system_markers"]
         )
         
         # Analyze shared binary signatures
         target_sigs = set(sig["signature"] for sig in target_binary.get("binary_signatures", []))
         same_origin_sigs = set(sig["signature"] for sig in same_origin_binary.get("binary_signatures", []))
-        ref_sigs = set(sig["signature"] for sig in reference_binary.get("binary_signatures", []))
         
-        shared_sigs = target_sigs & same_origin_sigs - ref_sigs
+        shared_sigs = target_sigs & same_origin_sigs
         for sig in shared_sigs:
             evidence["binary_signatures"].append({
                 "signature": sig,
-                "explanation": "Identical binary signature found in both target and same-origin files, but not in reference"
+                "explanation": "Identical binary signature found in both target and same-origin files"
             })
         
         # Analyze the evidence
@@ -452,7 +441,7 @@ class WordForensicAnalyzer:
                     evidence["definitive_markers"].append({
                         "type": "user_specific_path",
                         "value": path,
-                        "explanation": "Identical user-specific path with username found in both target and same-origin files, but not in reference"
+                        "explanation": "Identical user-specific path with username found in both target and same-origin files"
                     })
                 
                 # Strong indicators (template paths, application paths)
@@ -475,55 +464,45 @@ class WordForensicAnalyzer:
                     })
         
         # Check for identical styles and fonts (potential indicators)
-        shared_styles = set(target_content["styles"]) & set(same_origin_content["styles"]) - set(reference_content["styles"])
+        shared_styles = set(target_content["styles"]) & set(same_origin_content["styles"])
         if shared_styles:
             evidence["potential_indicators"].append({
                 "type": "shared_styles",
                 "value": list(shared_styles),
-                "explanation": "Identical document styles found in both target and same-origin files, but not in reference"
+                "explanation": "Identical document styles found in both target and same-origin files"
             })
         
-        shared_fonts = set(target_content["fonts_used"]) & set(same_origin_content["fonts_used"]) - set(reference_content["fonts_used"])
+        shared_fonts = set(target_content["fonts_used"]) & set(same_origin_content["fonts_used"])
         if shared_fonts:
             evidence["potential_indicators"].append({
                 "type": "shared_fonts",
                 "value": list(shared_fonts),
-                "explanation": "Identical fonts found in both target and same-origin files, but not in reference"
+                "explanation": "Identical fonts found in both target and same-origin files"
             })
         
         return evidence
 
     def compare_files(self) -> Dict[str, Any]:
-        """Compare the target file with same-origin and reference files."""
+        """Compare the target file with same-origin file."""
         target_content = self.analyze_content(self.target_path)
         same_origin_content = self.analyze_content(self.same_origin_path)
-        reference_content = self.analyze_content(self.reference_path)
         
-        # Calculate similarity scores
+        # Calculate similarity score with same-origin file
         same_origin_similarity = difflib.SequenceMatcher(
             None, 
             target_content["text_content"], 
             same_origin_content["text_content"]
         ).ratio() * 100
         
-        reference_similarity = difflib.SequenceMatcher(
-            None, 
-            target_content["text_content"], 
-            reference_content["text_content"]
-        ).ratio() * 100
-        
         return {
             "similarity_scores": {
-                "same_origin": round(same_origin_similarity, 2),
-                "reference": round(reference_similarity, 2)
+                "same_origin": round(same_origin_similarity, 2)
             },
             "shared_styles": {
-                "same_origin": list(set(target_content["styles"]) & set(same_origin_content["styles"])),
-                "reference": list(set(target_content["styles"]) & set(reference_content["styles"]))
+                "same_origin": list(set(target_content["styles"]) & set(same_origin_content["styles"]))
             },
             "shared_fonts": {
-                "same_origin": list(set(target_content["fonts_used"]) & set(same_origin_content["fonts_used"])),
-                "reference": list(set(target_content["fonts_used"]) & set(reference_content["fonts_used"]))
+                "same_origin": list(set(target_content["fonts_used"]) & set(same_origin_content["fonts_used"]))
             }
         }
 
@@ -533,11 +512,9 @@ class WordForensicAnalyzer:
             "analysis_timestamp": datetime.now().isoformat(),
             "target_file": str(self.target_path),
             "same_origin_file": str(self.same_origin_path),
-            "reference_file": str(self.reference_path),
             "metadata_analysis": {
                 "target": self.extract_metadata(self.target_path),
-                "same_origin": self.extract_metadata(self.same_origin_path),
-                "reference": self.extract_metadata(self.reference_path)
+                "same_origin": self.extract_metadata(self.same_origin_path)
             },
             "content_analysis": {
                 "target": self.analyze_content(self.target_path),
@@ -545,15 +522,12 @@ class WordForensicAnalyzer:
             },
             "ooxml_analysis": {
                 "target": self.analyze_ooxml_structure(self.target_path),
-                "same_origin": self.analyze_ooxml_structure(self.same_origin_path),
-                "reference": self.analyze_ooxml_structure(self.reference_path)
+                "same_origin": self.analyze_ooxml_structure(self.same_origin_path)
             },
             "binary_analysis": {
                 "target": self.analyze_binary_content(self.target_path),
-                "same_origin": self.analyze_binary_content(self.same_origin_path),
-                "reference": self.analyze_binary_content(self.reference_path)
-            },
-            "origin_evidence": self.find_origin_evidence()
+                "same_origin": self.analyze_binary_content(self.same_origin_path)
+            }
         }
         
         # Add statistical analysis
